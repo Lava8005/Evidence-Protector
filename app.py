@@ -175,12 +175,12 @@ if uploaded_file is not None:
             display_threats = [{k: v for k, v in t.items() if not k.startswith('_') and k not in ['context_before', 'first_log_after', 'Reason']} for t in threats_list]
             df_threats = pd.DataFrame(display_threats)
             
-            # --- THE MAGIC CLICKABLE DATAFRAME ---
+            # --- THE MAGIC CLICKABLE DATAFRAME (Fixed Syntax) ---
             event = st.dataframe(
                 df_threats, 
                 use_container_width=True, 
                 on_select="rerun", 
-                selection_mode="single_row",
+                selection_mode="single-row",
                 hide_index=True
             )
             
@@ -227,11 +227,12 @@ if uploaded_file is not None:
             display_fps = [{k: v for k, v in f.items() if not k.startswith('_') and k not in ['context_before', 'first_log_after', 'EPM After', 'EPM Before', 'Severity']} for f in fps_list]
             df_fps = pd.DataFrame(display_fps)
             
+            # --- THE MAGIC CLICKABLE DATAFRAME (Fixed Syntax) ---
             event_fp = st.dataframe(
                 df_fps, 
                 use_container_width=True, 
                 on_select="rerun", 
-                selection_mode="single_row",
+                selection_mode="single-row",
                 hide_index=True
             )
             
