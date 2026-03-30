@@ -1,7 +1,8 @@
 import streamlit as st
 import re
 import hashlib
-from datetime import datetime, timedelta
+import json
+from datetime import datetime
 from collections import deque
 import pandas as pd
 
@@ -87,7 +88,6 @@ if uploaded_file is not None:
 
             delta = (current_time - previous_time).total_seconds()
             
-            # THE GAP DETECTION RULE
             if delta > threshold_sec:
                 block_duration = max((previous_time - block_start_time).total_seconds() / 60.0, 0.1)
                 epm_before = round(logs_since_last_gap / block_duration, 2)
@@ -115,8 +115,7 @@ if uploaded_file is not None:
                     "_gap_end_time": current_time,
                     "_post_gap_logs": 0,
                     "_epm_after_raw": None,
-                    "first_log_after": "N/A",
-                    "_raw_conf": round(conf, 1)
+                    "first_log_after": "N/A"
                 })
                 
                 block_start_time = current_time
@@ -126,7 +125,6 @@ if uploaded_file is not None:
             logs_since_last_gap += 1
             recent_logs.append(message_content)
 
-    # Clean up and finalize EPM After values
     for g in gaps:
         if g["_epm_after_raw"] is not None:
             g["EPM After"] = g["_epm_after_raw"]
@@ -136,7 +134,6 @@ if uploaded_file is not None:
     # --- EXECUTIVE METRICS DASHBOARD ---
     st.markdown("---")
     
-    # Calculate Precision Metrics
     tot_float = float(total_lines)
     malf_float = float(malformed_lines)
     health_pct = 100.0 if tot_float == 0 else ((tot_float - malf_float) / tot_float) * 100.0
@@ -156,61 +153,81 @@ if uploaded_file is not None:
     col4.metric("Active Threats", len(threats_list))
     col5.metric("Anomaly Density", density_str)
 
-    # --- CSV EXPORT STRETCH GOAL ---
+    # --- MULTI-FORMAT EXPORT STRETCH GOAL ---
     if gaps:
-        df_export = pd.DataFrame([{k: v for k, v in g.items() if not k.startswith('_')} for g in gaps])
+        st.sidebar.markdown("### 💾 Export Reports")
+        
+        # Strip out the internal variables (keys starting with '_') for clean external reports
+        clean_export_data = [{k: v for k, v in g.items() if not k.startswith('_')} for g in gaps]
+        
+        # 1. CSV Export
+        df_export = pd.DataFrame(clean_export_data)
         csv_data = df_export.to_csv(index=False).encode('utf-8')
         st.sidebar.download_button(
-            label="💾 Download Forensic Report (CSV)",
+            label="📄 Download Report (CSV)",
             data=csv_data,
             file_name=f"forensic_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv"
         )
+        
+        # 2. JSON Export
+        json_data = json.dumps(clean_export_data, indent=4).encode('utf-8')
+        st.sidebar.download_button(
+            label="🗄️ Download Report (JSON)",
+            data=json_data,
+            file_name=f"forensic_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            mime="application/json"
+        )
 
-    # --- TABBED UI ROUTING ---
-    tab1, tab2, tab3 = st.tabs(["🚨 Active Threats", "✅ False Positives", "🧠 Explainable AI (Context)"])
+    # --- INTEGRATED TABBED UI ---
+    tab1, tab2 = st.tabs(["🚨 Active Threats & AI Analysis", "✅ False Positives & Noise"])
     
     with tab1:
         st.subheader("High & Medium Priority Incidents")
-        st.caption("💡 Tip: Click any column header to instantly sort the data.")
         if threats_list:
             display_threats = [{k: v for k, v in t.items() if not k.startswith('_') and k not in ['context_before', 'first_log_after', 'Reason']} for t in threats_list]
             st.dataframe(display_threats, use_container_width=True)
-        else:
-            st.success("No active threats detected in this log file.")
-
-    with tab2:
-        st.subheader("Filtered Noise & Known Safe Gaps")
-        st.info("The incidents below triggered the time-gap threshold but were automatically downgraded by our semantic scanner.")
-        if fps_list:
-            display_fps = [{k: v for k, v in f.items() if not k.startswith('_') and k not in ['context_before', 'first_log_after', 'EPM After', 'EPM Before', 'Severity']} for f in fps_list]
-            st.dataframe(display_fps, use_container_width=True)
-        else:
-            st.write("No false positives detected.")
-
-    with tab3:
-        st.subheader("Sequential Analysis & Digital Forensics")
-        st.write("Select an incident below to view the exact server state before and after the temporal gap.")
-        
-        if gaps:
-            selected_inc = st.selectbox("Select Incident ID:", [g["ID"] for g in gaps])
-            target_gap = next(g for g in gaps if g["ID"] == selected_inc)
             
-            # --- AI ANALYSIS ENGINE ---
+            st.markdown("---")
+            
+            st.subheader("🧠 Deep Dive AI Report")
+            selected_threat_id = st.selectbox("Select an Incident ID from the table above for forensic breakdown:", [t["ID"] for t in threats_list])
+            target_gap = next(t for t in threats_list if t["ID"] == selected_threat_id)
+            
             if target_gap["Severity"] == "CRITICAL":
                 ai_insight = f"High likelihood of targeted log deletion or massive brute-force script. The engine detected a sudden silence immediately following a period of high velocity ({target_gap['EPM Before']} EPM)."
-            elif target_gap["Severity"] == "MEDIUM":
-                ai_insight = "Suspicious temporal silence detected. The velocity leading up to this gap was normal, which may indicate stealth evasion or a non-standard system hang."
             else:
-                ai_insight = "Routine system event. The semantic keyword scanner detected normal reboot or initialization terms immediately prior to the silence."
+                ai_insight = "Suspicious temporal silence detected. The velocity leading up to this gap was normal, which may indicate stealth evasion or a non-standard system hang."
             
-            st.markdown(f"**🤖 AI ANALYSIS:** {ai_insight}")
+            st.info(f"**🤖 AI ANALYSIS:** {ai_insight}")
             st.markdown(f"**Classification:** {target_gap['Reason']} | **Confidence:** {target_gap['Confidence']}")
             
             st.code("\n".join(target_gap["context_before"]), language="log")
             st.error(f"⚠️ --- [ {target_gap['Duration (s)']} SECOND TEMPORAL GAP ] --- ⚠️")
             st.code(target_gap["first_log_after"], language="log")
+            
         else:
-            st.write("Upload a log file with temporal anomalies to view forensic context.")
+            st.success("No active threats detected in this log file.")
+
+    with tab2:
+        st.subheader("Filtered Noise & Known Safe Gaps")
+        if fps_list:
+            display_fps = [{k: v for k, v in f.items() if not k.startswith('_') and k not in ['context_before', 'first_log_after', 'EPM After', 'EPM Before', 'Severity']} for f in fps_list]
+            st.dataframe(display_fps, use_container_width=True)
+            
+            st.markdown("---")
+            
+            st.subheader("🧠 Deep Dive AI Report")
+            selected_fp_id = st.selectbox("Select an Incident ID to view the ignored sequence:", [f["ID"] for f in fps_list])
+            target_fp = next(f for f in fps_list if f["ID"] == selected_fp_id)
+            
+            st.success(f"**🤖 AI ANALYSIS:** Routine system event. The semantic keyword scanner detected normal reboot or initialization terms immediately prior to the silence.")
+            st.markdown(f"**Classification:** {target_fp['Reason']} | **Confidence:** {target_fp['Confidence']}")
+            
+            st.code("\n".join(target_fp["context_before"]), language="log")
+            st.warning(f"⏸️ --- [ {target_fp['Duration (s)']} SECOND ROUTINE SYSTEM DELAY ] --- ⏸️")
+            st.code(target_fp["first_log_after"], language="log")
+        else:
+            st.write("No false positives detected.")
 else:
     st.info("👈 Upload a log file in the sidebar to begin analysis.")
