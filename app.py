@@ -22,7 +22,6 @@ REBOOT_KEYWORDS = ["boot", "sys_init", "startup", "restarting", "shutdown"]
 
 # --- MATHEMATICAL SVG GENERATORS (NO EXTERNAL LIBRARIES) ---
 def generate_svg_donut(percentage, color, title):
-    """Uses Python's math library to calculate raw SVG arcs."""
     if percentage >= 99.99:
         path = f'<circle cx="50" cy="50" r="40" fill="none" stroke="{color}" stroke-width="12" />'
     elif percentage <= 0:
@@ -47,7 +46,6 @@ def generate_svg_donut(percentage, color, title):
     '''
 
 def generate_severity_donut(critical, medium, low):
-    """Calculates a multi-segment SVG donut chart for threat severities."""
     total = critical + medium + low
     if total == 0:
         return generate_svg_donut(0, "#8b949e", "SEVERITY SPLIT")
@@ -132,6 +130,9 @@ if uploaded_file is not None:
     gaps = []
     recent_logs = deque(maxlen=3)
     
+    # NEW: Dictionary to store logs per minute for the line graph
+    timeline_data = {}
+    
     with st.spinner("Executing O(1) Memory Scan & Calculating Threat Matrices..."):
         for line_bytes in uploaded_file:
             total_lines += 1
@@ -156,6 +157,10 @@ if uploaded_file is not None:
             except ValueError:
                 malformed_lines += 1
                 continue
+
+            # NEW: Bin the logs by minute to power the line chart
+            minute_bin = current_time.replace(second=0, microsecond=0)
+            timeline_data[minute_bin] = timeline_data.get(minute_bin, 0) + 1
 
             if first_time is None:
                 first_time = current_time
@@ -250,6 +255,15 @@ if uploaded_file is not None:
     with d2: st.markdown(generate_svg_donut(density_pct, "#d29922", "ANOMALY DENSITY"), unsafe_allow_html=True)
     with d3: st.markdown(generate_severity_donut(crit_count, med_count, low_count), unsafe_allow_html=True)
 
+    # --- NEW: INTERACTIVE LINE CHART ---
+    st.markdown("### 📈 Log Velocity Over Time (Events Per Minute)")
+    if timeline_data:
+        # Convert dictionary to DataFrame and sort chronologically
+        df_timeline = pd.DataFrame(list(timeline_data.items()), columns=['Time', 'Log Volume'])
+        df_timeline = df_timeline.sort_values('Time').set_index('Time')
+        # Streamlit's native line chart handles the visualization instantly
+        st.line_chart(df_timeline, color="#58a6ff")
+
     # --- EXPORT BUTTONS ---
     if gaps:
         st.sidebar.markdown("### 💾 Export Reports")
@@ -273,7 +287,7 @@ if uploaded_file is not None:
                     gemini_response = call_gemini_api(gemini_key, condensed_context)
                     st.info(gemini_response)
         else:
-            st.warning("👈 Enter your freshly generated Gemini API Key in the sidebar to automatically generate an executive summary.")
+            st.warning("👈 Enter your Gemini API Key in the sidebar to automatically generate an executive summary.")
     else:
         st.success("No active threats to summarize.")
 
