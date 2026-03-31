@@ -2,6 +2,8 @@ import streamlit as st
 import re
 import hashlib
 import json
+import math
+import urllib.request
 from datetime import datetime
 from collections import deque
 import pandas as pd
@@ -17,6 +19,89 @@ LOG_FORMATS = {
 
 REBOOT_KEYWORDS = ["boot", "sys_init", "startup", "restarting", "shutdown"]
 
+# --- MATHEMATICAL SVG GENERATORS (NO EXTERNAL LIBRARIES) ---
+def generate_svg_donut(percentage, color, title):
+    """Uses Python's math library to calculate raw SVG arcs."""
+    if percentage >= 99.99:
+        path = f'<circle cx="50" cy="50" r="40" fill="none" stroke="{color}" stroke-width="12" />'
+    elif percentage <= 0:
+        path = ''
+    else:
+        angle = percentage * 3.6
+        rad = math.radians(angle - 90)
+        x = 50 + 40 * math.cos(rad)
+        y = 50 + 40 * math.sin(rad)
+        large_arc = 1 if angle > 180 else 0
+        path = f'<path d="M 50 10 A 40 40 0 {large_arc} 1 {x} {y}" fill="none" stroke="{color}" stroke-width="12" stroke-linecap="round" />'
+        
+    return f'''
+    <div style="text-align: center;">
+        <svg viewBox="0 0 100 100" width="120px" height="120px">
+            <circle cx="50" cy="50" r="40" fill="none" stroke="#30363d" stroke-width="12" />
+            {path}
+            <text x="50" y="50" font-family="Consolas" font-size="16" fill="{color}" text-anchor="middle" dominant-baseline="central" font-weight="bold">{percentage:.1f}%</text>
+        </svg>
+        <p style="font-family: Consolas; color: #8b949e; font-size: 14px; font-weight: bold;">{title}</p>
+    </div>
+    '''
+
+def generate_severity_donut(critical, medium, low):
+    """Calculates a multi-segment SVG donut chart for threat severities."""
+    total = critical + medium + low
+    if total == 0:
+        return generate_svg_donut(0, "#8b949e", "SEVERITY SPLIT")
+        
+    angles = [(critical/total)*360, (medium/total)*360, (low/total)*360]
+    colors = ["#f85149", "#d29922", "#2ea043"] # Red, Yellow, Green
+    svg_paths = ""
+    current_angle = 0
+    
+    for i in range(3):
+        if angles[i] == 0: continue
+        if angles[i] >= 359.9:
+            svg_paths += f'<circle cx="50" cy="50" r="40" fill="none" stroke="{colors[i]}" stroke-width="12" />'
+            continue
+            
+        start_rad = math.radians(current_angle - 90)
+        x1 = 50 + 40 * math.cos(start_rad)
+        y1 = 50 + 40 * math.sin(start_rad)
+        
+        end_rad = math.radians(current_angle + angles[i] - 90)
+        x2 = 50 + 40 * math.cos(end_rad)
+        y2 = 50 + 40 * math.sin(end_rad)
+        
+        large_arc = 1 if angles[i] > 180 else 0
+        svg_paths += f'<path d="M {x1} {y1} A 40 40 0 {large_arc} 1 {x2} {y2}" fill="none" stroke="{colors[i]}" stroke-width="12" />'
+        current_angle += angles[i]
+        
+    return f'''
+    <div style="text-align: center;">
+        <svg viewBox="0 0 100 100" width="120px" height="120px">
+            <circle cx="50" cy="50" r="40" fill="none" stroke="#30363d" stroke-width="12" />
+            {svg_paths}
+            <text x="50" y="45" font-family="Consolas" font-size="20" fill="#c9d1d9" text-anchor="middle" font-weight="bold">{int(total)}</text>
+            <text x="50" y="60" font-family="Consolas" font-size="8" fill="#8b949e" text-anchor="middle">TOTAL THREATS</text>
+        </svg>
+        <p style="font-family: Consolas; color: #8b949e; font-size: 14px; font-weight: bold;">SEVERITY SPLIT</p>
+    </div>
+    '''
+
+# --- ZERO-DEPENDENCY GEMINI API CLIENT ---
+def call_gemini_api(api_key, context_data):
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    headers = {'Content-Type': 'application/json'}
+    prompt = f"Act as an elite Cybersecurity Analyst. Review these flagged system incidents. Give a 3-sentence executive summary of the danger, followed by 3 bullet points of immediate actionable remediation steps:\n\n{context_data}"
+    
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers)
+    
+    try:
+        with urllib.request.urlopen(req) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            return result['candidates'][0]['content']['parts'][0]['text']
+    except urllib.error.URLError as e:
+        return f"🚨 API Connection Failed. Please check your API Key. Error: {str(e)}"
+
 # --- UI HEADER ---
 st.title("🛡️ The Evidence Protector: Cloud Triage Dashboard")
 st.markdown("Automated Log Integrity Monitor with Deterministic AI Confidence Scoring")
@@ -27,6 +112,10 @@ with st.sidebar:
     selected_format = st.selectbox("Log Format Profile", list(LOG_FORMATS.keys()))
     threshold_sec = st.slider("Suspicion Threshold (Seconds)", min_value=10, max_value=300, value=60, step=10)
     uploaded_file = st.file_uploader("Upload Server Log", type=["log", "txt"])
+    
+    st.markdown("---")
+    st.header("🧠 Generative AI Setup")
+    gemini_key = st.text_input("Gemini API Key (Optional)", type="password", help="Enter your Gemini API key to unlock automated Executive Summaries.")
 
 # --- CORE INTELLIGENCE ENGINE ---
 if uploaded_file is not None:
@@ -130,27 +219,36 @@ if uploaded_file is not None:
         else:
             g["EPM After"] = "Insufficient Data"
 
-    # --- EXECUTIVE METRICS DASHBOARD ---
+    # --- MATH-BASED METRICS DASHBOARD ---
     st.markdown("---")
     
     tot_float = float(total_lines)
     malf_float = float(malformed_lines)
     health_pct = 100.0 if tot_float == 0 else ((tot_float - malf_float) / tot_float) * 100.0
-    health_str = "100%" if health_pct == 100.0 else ("0%" if health_pct == 0.0 else f"{min(health_pct, 99.9):.1f}%")
     
     threats_list = [g for g in gaps if g["Severity"] in ["CRITICAL", "MEDIUM"]]
     fps_list = [g for g in gaps if g["Severity"] == "LOW"]
     
     total_gaps_float = float(len(gaps))
     density_pct = 0.0 if tot_float == 0 else (total_gaps_float / tot_float) * 100.0
-    density_str = "0%" if density_pct == 0.0 else f"{density_pct:.1f}%"
+    
+    crit_count = sum(1 for g in gaps if g["Severity"] == "CRITICAL")
+    med_count = sum(1 for g in gaps if g["Severity"] == "MEDIUM")
+    low_count = sum(1 for g in gaps if g["Severity"] == "LOW")
 
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Cryptographic Anchor", f"{file_hash.hexdigest()[:8]}...")
+    # Top Row: Text KPIs
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Cryptographic Anchor", f"{file_hash.hexdigest()[:12]}...")
     col2.metric("Total Lines Scanned", f"{total_lines:,}")
-    col3.metric("Log Health", health_str)
-    col4.metric("Active Threats", len(threats_list))
-    col5.metric("Anomaly Density", density_str)
+    col3.metric("Malformed Data Packets", f"{malformed_lines:,}")
+
+    st.write("") # Spacer
+    
+    # Bottom Row: Mathematical SVG Donuts!
+    d1, d2, d3 = st.columns(3)
+    with d1: st.markdown(generate_svg_donut(health_pct, "#2ea043", "LOG HEALTH"), unsafe_allow_html=True)
+    with d2: st.markdown(generate_svg_donut(density_pct, "#d29922", "ANOMALY DENSITY"), unsafe_allow_html=True)
+    with d3: st.markdown(generate_severity_donut(crit_count, med_count, low_count), unsafe_allow_html=True)
 
     # --- EXPORT BUTTONS ---
     if gaps:
@@ -159,13 +257,31 @@ if uploaded_file is not None:
         
         df_export = pd.DataFrame(clean_export_data)
         csv_data = df_export.to_csv(index=False).encode('utf-8')
-        st.sidebar.download_button("📄 Download CSV", data=csv_data, file_name=f"forensic_report.csv", mime="text/csv")
+        st.sidebar.download_button("📄 Download CSV", data=csv_data, file_name="forensic_report.csv", mime="text/csv")
         
         json_data = json.dumps(clean_export_data, indent=4).encode('utf-8')
-        st.sidebar.download_button("🗄️ Download JSON", data=json_data, file_name=f"forensic_report.json", mime="application/json")
+        st.sidebar.download_button("🗄️ Download JSON", data=json_data, file_name="forensic_report.json", mime="application/json")
+
+    # --- GEMINI AI EXECUTIVE REPORT GENERATOR ---
+    st.markdown("---")
+    st.subheader("🤖 Generative AI Executive Summary")
+    if threats_list:
+        if gemini_key:
+            if st.button("✨ Generate Incident Report via Gemini"):
+                with st.spinner("Connecting to Gemini via standard REST API..."):
+                    # Prepare a condensed payload so we don't blow up the API token limit
+                    condensed_context = "\n".join([f"ID: {t['ID']} | Duration: {t['Duration (s)']}s | Velocity Before: {t['EPM Before']} | Classification: {t['Reason']}" for t in threats_list[:15]])
+                    
+                    gemini_response = call_gemini_api(gemini_key, condensed_context)
+                    st.info(gemini_response)
+        else:
+            st.warning("👈 Enter your Gemini API Key in the sidebar to automatically generate an executive summary of these threats.")
+    else:
+        st.success("No active threats to summarize.")
 
     # --- INTERACTIVE TABBED UI ---
-    tab1, tab2 = st.tabs(["🚨 Active Threats & AI Analysis", "✅ False Positives & Noise"])
+    st.markdown("---")
+    tab1, tab2 = st.tabs(["🚨 Active Threats & Forensics", "✅ False Positives & Noise"])
     
     with tab1:
         st.subheader("High & Medium Priority Incidents")
@@ -175,49 +291,29 @@ if uploaded_file is not None:
             display_threats = [{k: v for k, v in t.items() if not k.startswith('_') and k not in ['context_before', 'first_log_after', 'Reason']} for t in threats_list]
             df_threats = pd.DataFrame(display_threats)
             
-            # --- THE MAGIC CLICKABLE DATAFRAME (Fixed Syntax) ---
-            event = st.dataframe(
-                df_threats, 
-                use_container_width=True, 
-                on_select="rerun", 
-                selection_mode="single-row",
-                hide_index=True
-            )
+            event = st.dataframe(df_threats, use_container_width=True, on_select="rerun", selection_mode="single-row", hide_index=True)
             
-            st.markdown("---")
-            
-            # If a row is clicked, render the report!
             if event.selection.rows:
                 selected_idx = event.selection.rows[0]
-                target_id = df_threats.iloc[selected_idx]["ID"]
-                target_gap = next(t for t in threats_list if t["ID"] == target_id)
+                target_gap = next(t for t in threats_list if t["ID"] == df_threats.iloc[selected_idx]["ID"])
                 
-                st.subheader(f"🧠 Deep Dive AI Report: {target_gap['ID']}")
-                
+                st.subheader(f"🧠 Local Deterministic AI Insight: {target_gap['ID']}")
                 if target_gap["Severity"] == "CRITICAL":
                     ai_insight = f"High likelihood of targeted log deletion or massive brute-force script. The engine detected a sudden silence immediately following a period of high server velocity (**{target_gap['EPM Before']} EPM**)."
                 else:
                     ai_insight = "Suspicious temporal silence detected. The velocity leading up to this gap was normal, which may indicate stealth evasion or a non-standard system hang."
                 
-                st.info(f"**🤖 AI ANALYSIS:** {ai_insight}")
+                st.info(f"**Insight:** {ai_insight}")
                 st.markdown(f"**Classification:** `{target_gap['Reason']}` | **Confidence:** `{target_gap['Confidence']}`")
                 
-                # --- HIGHLY DETAILED FORENSIC LABELS ---
                 st.markdown("#### 🕒 System State Immediately Before Anomaly")
-                st.caption("These are the last logged events right before the server went completely silent.")
                 st.code("\n".join(target_gap["context_before"]), language="log")
-                
                 st.error(f"🚨 --- [ {target_gap['Duration (s)']} SECOND TEMPORAL GAP ] --- 🚨")
-                
                 st.markdown("#### 🟢 System Resumption")
-                st.caption("This is the exact first event recorded when the logging finally came back online.")
                 st.code(target_gap["first_log_after"], language="log")
                 
-            else:
-                st.info("👆 Select an incident from the table above to view forensic details.")
-                
         else:
-            st.success("No active threats detected in this log file.")
+            st.success("No active threats detected.")
 
     with tab2:
         st.subheader("Filtered Noise & Known Safe Gaps")
@@ -227,38 +323,21 @@ if uploaded_file is not None:
             display_fps = [{k: v for k, v in f.items() if not k.startswith('_') and k not in ['context_before', 'first_log_after', 'EPM After', 'EPM Before', 'Severity']} for f in fps_list]
             df_fps = pd.DataFrame(display_fps)
             
-            # --- THE MAGIC CLICKABLE DATAFRAME (Fixed Syntax) ---
-            event_fp = st.dataframe(
-                df_fps, 
-                use_container_width=True, 
-                on_select="rerun", 
-                selection_mode="single-row",
-                hide_index=True
-            )
-            
-            st.markdown("---")
+            event_fp = st.dataframe(df_fps, use_container_width=True, on_select="rerun", selection_mode="single-row", hide_index=True)
             
             if event_fp.selection.rows:
                 selected_idx = event_fp.selection.rows[0]
-                target_id = df_fps.iloc[selected_idx]["ID"]
-                target_fp = next(f for f in fps_list if f["ID"] == target_id)
+                target_fp = next(f for f in fps_list if f["ID"] == df_fps.iloc[selected_idx]["ID"])
                 
-                st.subheader(f"🧠 Deep Dive AI Report: {target_fp['ID']}")
-                st.success(f"**🤖 AI ANALYSIS:** Routine system event. The semantic keyword scanner detected normal reboot or initialization terms immediately prior to the silence.")
+                st.subheader(f"🧠 Local Deterministic AI Insight: {target_fp['ID']}")
+                st.success("Routine system event. The semantic keyword scanner detected normal reboot or initialization terms immediately prior to the silence.")
                 st.markdown(f"**Classification:** `{target_fp['Reason']}` | **Confidence:** `{target_fp['Confidence']}`")
                 
-                # --- EXPLICIT FALSE POSITIVE LABELS ---
                 st.markdown("#### 🕒 System Shutdown Sequence")
-                st.caption("Notice the reboot/shutdown keywords in these final logs before the gap.")
                 st.code("\n".join(target_fp["context_before"]), language="log")
-                
                 st.warning(f"⏸️ --- [ {target_fp['Duration (s)']} SECOND ROUTINE SYSTEM DELAY ] --- ⏸️")
-                
                 st.markdown("#### 🟢 System Startup")
-                st.caption("The system successfully booted back up.")
                 st.code(target_fp["first_log_after"], language="log")
-            else:
-                st.info("👆 Select an incident from the table above to view forensic details.")
         else:
             st.write("No false positives detected.")
 else:
