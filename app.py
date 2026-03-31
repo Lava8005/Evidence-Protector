@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import urllib.request
+import urllib.error
 from datetime import datetime
 from collections import deque
 import pandas as pd
@@ -52,7 +53,7 @@ def generate_severity_donut(critical, medium, low):
         return generate_svg_donut(0, "#8b949e", "SEVERITY SPLIT")
         
     angles = [(critical/total)*360, (medium/total)*360, (low/total)*360]
-    colors = ["#f85149", "#d29922", "#2ea043"] # Red, Yellow, Green
+    colors = ["#f85149", "#d29922", "#2ea043"] 
     svg_paths = ""
     current_angle = 0
     
@@ -88,7 +89,7 @@ def generate_severity_donut(critical, medium, low):
 
 # --- ZERO-DEPENDENCY GEMINI API CLIENT ---
 def call_gemini_api(api_key, context_data):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
     prompt = f"Act as an elite Cybersecurity Analyst. Review these flagged system incidents. Give a 3-sentence executive summary of the danger, followed by 3 bullet points of immediate actionable remediation steps:\n\n{context_data}"
     
@@ -100,7 +101,8 @@ def call_gemini_api(api_key, context_data):
             result = json.loads(response.read().decode('utf-8'))
             return result['candidates'][0]['content']['parts'][0]['text']
     except urllib.error.URLError as e:
-        return f"🚨 API Connection Failed. Please check your API Key. Error: {str(e)}"
+        error_details = e.read().decode('utf-8') if hasattr(e, 'read') else str(e)
+        return f"🚨 API Connection Failed.\n\nRaw Google Error:\n{error_details}"
 
 # --- UI HEADER ---
 st.title("🛡️ The Evidence Protector: Cloud Triage Dashboard")
@@ -236,15 +238,13 @@ if uploaded_file is not None:
     med_count = sum(1 for g in gaps if g["Severity"] == "MEDIUM")
     low_count = sum(1 for g in gaps if g["Severity"] == "LOW")
 
-    # Top Row: Text KPIs
     col1, col2, col3 = st.columns(3)
     col1.metric("Cryptographic Anchor", f"{file_hash.hexdigest()[:12]}...")
     col2.metric("Total Lines Scanned", f"{total_lines:,}")
     col3.metric("Malformed Data Packets", f"{malformed_lines:,}")
 
-    st.write("") # Spacer
+    st.write("") 
     
-    # Bottom Row: Mathematical SVG Donuts!
     d1, d2, d3 = st.columns(3)
     with d1: st.markdown(generate_svg_donut(health_pct, "#2ea043", "LOG HEALTH"), unsafe_allow_html=True)
     with d2: st.markdown(generate_svg_donut(density_pct, "#d29922", "ANOMALY DENSITY"), unsafe_allow_html=True)
@@ -269,13 +269,11 @@ if uploaded_file is not None:
         if gemini_key:
             if st.button("✨ Generate Incident Report via Gemini"):
                 with st.spinner("Connecting to Gemini via standard REST API..."):
-                    # Prepare a condensed payload so we don't blow up the API token limit
                     condensed_context = "\n".join([f"ID: {t['ID']} | Duration: {t['Duration (s)']}s | Velocity Before: {t['EPM Before']} | Classification: {t['Reason']}" for t in threats_list[:15]])
-                    
                     gemini_response = call_gemini_api(gemini_key, condensed_context)
                     st.info(gemini_response)
         else:
-            st.warning("👈 Enter your Gemini API Key in the sidebar to automatically generate an executive summary of these threats.")
+            st.warning("👈 Enter your freshly generated Gemini API Key in the sidebar to automatically generate an executive summary.")
     else:
         st.success("No active threats to summarize.")
 
