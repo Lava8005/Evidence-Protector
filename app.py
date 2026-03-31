@@ -129,8 +129,6 @@ if uploaded_file is not None:
     
     gaps = []
     recent_logs = deque(maxlen=3)
-    
-    # NEW: Dictionary to store logs per minute for the line graph
     timeline_data = {}
     
     with st.spinner("Executing O(1) Memory Scan & Calculating Threat Matrices..."):
@@ -158,7 +156,6 @@ if uploaded_file is not None:
                 malformed_lines += 1
                 continue
 
-            # NEW: Bin the logs by minute to power the line chart
             minute_bin = current_time.replace(second=0, microsecond=0)
             timeline_data[minute_bin] = timeline_data.get(minute_bin, 0) + 1
 
@@ -190,10 +187,11 @@ if uploaded_file is not None:
                 context_string = " ".join(recent_logs).lower()
                 is_reboot = any(kw in context_string for kw in REBOOT_KEYWORDS)
                 
-                if is_reboot:
+                # HARDENED DEFENSE: High EPM overrides spoofed reboot keywords
+                if epm_before > 15:
+                    severity, conf, reason = "CRITICAL", min(88.0 + (epm_before * 0.05), 99.9), "High Velocity Event / Possible Log Spoofing"
+                elif is_reboot and epm_before <= 15:
                     severity, conf, reason = "LOW", 98.5, "Routine System Reboot"
-                elif epm_before > 15:
-                    severity, conf, reason = "CRITICAL", min(88.0 + (epm_before * 0.05), 99.9), "High Velocity Event"
                 else:
                     severity, conf, reason = "MEDIUM", min(70.0 + (delta * 0.01), 87.9), "Suspicious Temporal Silence"
                         
@@ -255,13 +253,11 @@ if uploaded_file is not None:
     with d2: st.markdown(generate_svg_donut(density_pct, "#d29922", "ANOMALY DENSITY"), unsafe_allow_html=True)
     with d3: st.markdown(generate_severity_donut(crit_count, med_count, low_count), unsafe_allow_html=True)
 
-    # --- NEW: INTERACTIVE LINE CHART ---
+    # --- INTERACTIVE LINE CHART ---
     st.markdown("### 📈 Log Velocity Over Time (Events Per Minute)")
     if timeline_data:
-        # Convert dictionary to DataFrame and sort chronologically
         df_timeline = pd.DataFrame(list(timeline_data.items()), columns=['Time', 'Log Volume'])
         df_timeline = df_timeline.sort_values('Time').set_index('Time')
-        # Streamlit's native line chart handles the visualization instantly
         st.line_chart(df_timeline, color="#58a6ff")
 
     # --- EXPORT BUTTONS ---
@@ -287,7 +283,7 @@ if uploaded_file is not None:
                     gemini_response = call_gemini_api(gemini_key, condensed_context)
                     st.info(gemini_response)
         else:
-            st.warning("👈 Enter your Gemini API Key in the sidebar to automatically generate an executive summary.")
+            st.warning("👈 Enter your freshly generated Gemini API Key in the sidebar to automatically generate an executive summary.")
     else:
         st.success("No active threats to summarize.")
 
